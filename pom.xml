@@ -44,15 +44,7 @@ Contributors:
         <module>leshan-core-cf</module>
         <module>leshan-server-core</module>
         <module>leshan-server-cf</module>
-        <module>leshan-server-redis</module>
-        <module>leshan-client-core</module>
-        <module>leshan-client-cf</module>
-
-        <module>leshan-integration-tests</module> 
-
         <module>leshan-server-demo</module>
-        <module>leshan-client-demo</module>
-        <module>leshan-bsserver-demo</module>
     </modules>
 
     <scm>
@@ -122,13 +114,6 @@ Contributors:
     </distributionManagement>
 
     <profiles>
-        <profile>
-            <!-- This profile launch all redis integration tests -->
-            <id>redis</id>
-            <properties>
-                <test.exclusion.pattern>nothing</test.exclusion.pattern>
-            </properties>
-        </profile>
         <profile>
             <!-- this profile generate all the needed artifact and signatures needed, then release it on maven central -->
             <id>release</id>
@@ -510,22 +495,7 @@ Contributors:
             </dependency>
             <dependency>
                 <groupId>${project.groupId}</groupId>
-                <artifactId>leshan-client-core</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>${project.groupId}</groupId>
                 <artifactId>leshan-server-cf</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>${project.groupId}</groupId>
-                <artifactId>leshan-client-cf</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>${project.groupId}</groupId>
-                <artifactId>leshan-server-redis</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
