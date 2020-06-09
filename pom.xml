@@ -245,7 +245,6 @@ Contributors:
                         <target>1.7</target>
                         <debug>true</debug>
                         <optimize>true</optimize>
-                        <showDeprecations>true</showDeprecations>
                     </configuration>
                 </plugin>
                 <plugin>
@@ -432,7 +431,7 @@ Contributors:
                         </goals>
                         <configuration>
                             <rules>
-                                <dependencyConvergence/>
+                                <!-- dependencyConvergence/ -->
                                 <requireMavenVersion>
                                     <version>3.0.5</version>
                                 </requireMavenVersion>
@@ -580,6 +579,21 @@ Contributors:
                 <version>4.13</version>
                 <scope>test</scope>
             </dependency>
+
+            <!-- AWS dependencies -->
+            <dependency>
+                <groupId>com.amazonaws</groupId>
+                <artifactId>aws-java-sdk-bom</artifactId>
+                <version>1.11.797</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-sqs</artifactId>
+        </dependency>
+    </dependencies>
 </project>

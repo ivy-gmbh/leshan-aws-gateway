@@ -21,15 +21,18 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.net.BindException;
 import java.net.InetSocketAddress;
-import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
+import java.util.*;
+import java.util.UUID;
 
+import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.auth.AWSStaticCredentialsProvider;
+import com.amazonaws.services.sqs.AmazonSQS;
+import com.amazonaws.services.sqs.model.MessageAttributeValue;
+import com.amazonaws.services.sqs.model.SendMessageRequest;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.HelpFormatter;
@@ -44,11 +47,16 @@ import org.eclipse.jetty.webapp.WebAppContext;
 import org.eclipse.leshan.core.LwM2m;
 import org.eclipse.leshan.core.model.ObjectLoader;
 import org.eclipse.leshan.core.model.ObjectModel;
+import org.eclipse.leshan.core.node.LwM2mPath;
+import org.eclipse.leshan.core.node.LwM2mResource;
+import org.eclipse.leshan.core.node.LwM2mSingleResource;
 import org.eclipse.leshan.core.node.codec.DefaultLwM2mNodeDecoder;
 import org.eclipse.leshan.core.node.codec.DefaultLwM2mNodeEncoder;
 import org.eclipse.leshan.core.node.codec.LwM2mNodeDecoder;
 import org.eclipse.leshan.core.observation.Observation;
+import org.eclipse.leshan.core.request.ObserveRequest;
 import org.eclipse.leshan.core.response.ObserveResponse;
+import org.eclipse.leshan.core.response.ReadResponse;
 import org.eclipse.leshan.core.util.SecurityUtil;
 import org.eclipse.leshan.server.californium.LeshanServer;
 import org.eclipse.leshan.server.californium.LeshanServerBuilder;
@@ -63,12 +71,13 @@ import org.eclipse.leshan.server.observation.ObservationListener;
 import org.eclipse.leshan.server.queue.PresenceListener;
 import org.eclipse.leshan.server.registration.Registration;
 import org.eclipse.leshan.server.registration.RegistrationListener;
-import org.eclipse.leshan.server.registration.RegistrationService;
 import org.eclipse.leshan.server.registration.RegistrationUpdate;
 import org.eclipse.leshan.server.security.EditableSecurityStore;
 import org.eclipse.leshan.server.security.FileSecurityStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.amazonaws.services.sqs.AmazonSQSClientBuilder;
 
 public class LeshanServerDemo {
 
@@ -127,9 +136,23 @@ public class LeshanServerDemo {
 
     private final static String USAGE = "java -jar leshan-server-demo.jar [OPTION]\n\n";
 
-    private final static String DEFAULT_KEYSTORE_TYPE = KeyStore.getDefaultType();
+    private final static AmazonSQS sqs = AmazonSQSClientBuilder.standard()
+            .withRegion(System.getenv("AWS_REGION"))
+            .withCredentials(
+                    new AWSStaticCredentialsProvider(
+                            new AWSCredentials() {
+                                @Override
+                                public String getAWSAccessKeyId() {
+                                    return System.getenv("AWS_ACCESS_KEY_ID");
+                                }
 
-    private final static String DEFAULT_KEYSTORE_ALIAS = "leshan";
+                                @Override
+                                public String getAWSSecretKey() {
+                                    return System.getenv("AWS_SECRET_ACCESS_KEY");
+                                }
+                            }
+                    )
+            ).build();
 
     public static void main(String[] args) throws FileNotFoundException {
         // Define options for command line tools
@@ -426,7 +449,7 @@ public class LeshanServerDemo {
         builder.setEncoder(new DefaultLwM2mNodeEncoder(new MagicLwM2mValueConverter()));
 
         // Create and start LWM2M server
-        LeshanServer lwServer = builder.build();
+        final LeshanServer lwServer = builder.build();
 
         // Now prepare Jetty
         InetSocketAddress jettyAddr;
@@ -472,6 +495,30 @@ public class LeshanServerDemo {
             public void registered(Registration registration, Registration previousReg,
                                    Collection<Observation> previousObsersations) {
                 System.out.println("new device: " + registration.getEndpoint());
+                // Observe battery
+                try {
+                    ReadResponse response = lwServer.send(registration, new ObserveRequest(3, 0, 9));
+                    if (response.isSuccess()) {
+                        System.out.println("Device battery level: " + ((LwM2mResource)response.getContent()).getValue());
+                        publishNotification(registration, 3,0,9, ((LwM2mResource)response.getContent()).getValue().toString());
+                    }else {
+                        System.out.println("Failed to read:" + response.getCode() + " " + response.getErrorMessage());
+                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                // Observe temperature
+                try {
+                    ReadResponse response = lwServer.send(registration, new ObserveRequest(3303,0,5700));
+                    if (response.isSuccess()) {
+                        System.out.println("Device temperature: " + ((LwM2mResource)response.getContent()).getValue());
+                        publishNotification(registration, 3303,0,5700, ((LwM2mResource)response.getContent()).getValue().toString());
+                    }else {
+                        System.out.println("Failed to read: " + response.getCode() + " " + response.getErrorMessage());
+                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
             }
 
             @Override
@@ -500,6 +547,7 @@ public class LeshanServerDemo {
             @Override
             public void onResponse(Observation observation, Registration registration, ObserveResponse response) {
                 System.out.println("observation response: " + registration.getEndpoint() + " " + response.getCode() + " " + response.getContent());
+                publishObservationResponse(registration, response);
             }
 
             @Override
@@ -522,5 +570,44 @@ public class LeshanServerDemo {
         });
 
 
+    }
+
+    private static void publishObservationResponse (Registration registration, ObserveResponse response) {
+        LwM2mPath path =response.getObservation().getPath();
+        publishNotification(registration, path.getObjectId(), path.getObjectInstanceId(), path.getResourceId(), ((LwM2mSingleResource) response.getContent()).getValue().toString());
+    }
+
+    private static void publishNotification (Registration registration, int objectId, int objectInstanceId, int resourceId, String value) {
+        final Map<String, MessageAttributeValue> messageAttributes = new HashMap<>();
+        // Endpoint
+        messageAttributes.put("Endpoint", new MessageAttributeValue()
+                .withDataType("String")
+                .withStringValue(registration.getEndpoint()));
+
+        // Path
+        messageAttributes.put("objectId", new MessageAttributeValue()
+                .withDataType("String")
+                .withStringValue(String.valueOf(objectId)));
+        messageAttributes.put("objectInstanceId", new MessageAttributeValue()
+                .withDataType("String")
+                .withStringValue(String.valueOf(objectInstanceId)));
+        messageAttributes.put("resourceId", new MessageAttributeValue()
+                .withDataType("String")
+                .withStringValue(String.valueOf(resourceId)));
+
+        // Value
+        messageAttributes.put("Value", new MessageAttributeValue()
+                .withDataType("String")
+                .withStringValue(value));
+
+        SendMessageRequest send_msg_request = new SendMessageRequest()
+                .withQueueUrl(System.getenv("AWS_QUEUE_URL"))
+                .withMessageAttributes(messageAttributes)
+                .withMessageGroupId(registration.getEndpoint())
+                .withMessageDeduplicationId(UUID.randomUUID().toString())
+                .withMessageBody("notification")
+                ;
+
+        sqs.sendMessage(send_msg_request);
     }
 }
