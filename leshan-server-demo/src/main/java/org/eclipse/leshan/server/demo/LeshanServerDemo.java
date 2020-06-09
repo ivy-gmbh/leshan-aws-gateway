@@ -48,6 +48,7 @@ import org.eclipse.leshan.core.node.codec.DefaultLwM2mNodeDecoder;
 import org.eclipse.leshan.core.node.codec.DefaultLwM2mNodeEncoder;
 import org.eclipse.leshan.core.node.codec.LwM2mNodeDecoder;
 import org.eclipse.leshan.core.observation.Observation;
+import org.eclipse.leshan.core.response.ObserveResponse;
 import org.eclipse.leshan.core.util.SecurityUtil;
 import org.eclipse.leshan.server.californium.LeshanServer;
 import org.eclipse.leshan.server.californium.LeshanServerBuilder;
@@ -58,8 +59,11 @@ import org.eclipse.leshan.server.demo.servlet.SecurityServlet;
 import org.eclipse.leshan.server.demo.utils.MagicLwM2mValueConverter;
 import org.eclipse.leshan.server.model.LwM2mModelProvider;
 import org.eclipse.leshan.server.model.VersionedModelProvider;
+import org.eclipse.leshan.server.observation.ObservationListener;
+import org.eclipse.leshan.server.queue.PresenceListener;
 import org.eclipse.leshan.server.registration.Registration;
 import org.eclipse.leshan.server.registration.RegistrationListener;
+import org.eclipse.leshan.server.registration.RegistrationService;
 import org.eclipse.leshan.server.registration.RegistrationUpdate;
 import org.eclipse.leshan.server.security.EditableSecurityStore;
 import org.eclipse.leshan.server.security.FileSecurityStore;
@@ -464,19 +468,59 @@ public class LeshanServerDemo {
         LOG.info("Web server started at {}.", server.getURI());
 
         lwServer.getRegistrationService().addListener(new RegistrationListener() {
+            @Override
             public void registered(Registration registration, Registration previousReg,
                                    Collection<Observation> previousObsersations) {
                 System.out.println("new device: " + registration.getEndpoint());
             }
 
+            @Override
             public void updated(RegistrationUpdate update, Registration updatedReg, Registration previousReg) {
                 System.out.println("device is still here: " + updatedReg.getEndpoint());
             }
 
+            @Override
             public void unregistered(Registration registration, Collection<Observation> observations, boolean expired,
                                      Registration newReg) {
                 System.out.println("device left: " + registration.getEndpoint());
             }
         });
+
+        lwServer.getObservationService().addListener(new ObservationListener() {
+            @Override
+            public void newObservation(Observation observation, Registration registration) {
+                System.out.println("new obervation: " + registration.getEndpoint());
+            }
+
+            @Override
+            public void cancelled(Observation observation) {
+                System.out.println("observation cancelled: " + observation.getRegistrationId());
+            }
+
+            @Override
+            public void onResponse(Observation observation, Registration registration, ObserveResponse response) {
+                System.out.println("observation response: " + registration.getEndpoint() + " " + response.getCode() + " " + response.getContent());
+            }
+
+            @Override
+            public void onError(Observation observation, Registration registration, Exception error) {
+                System.out.println("observation error: " + observation.getRegistrationId());
+                System.out.println(error.toString());
+            }
+        });
+
+        lwServer.getPresenceService().addListener(new PresenceListener() {
+            @Override
+            public void onAwake(Registration registration) {
+                System.out.println("onAwake: " + registration.getEndpoint());
+            }
+
+            @Override
+            public void onSleeping(Registration registration) {
+                System.out.println("onSleeping: " + registration.getEndpoint());
+            }
+        });
+
+
     }
 }
