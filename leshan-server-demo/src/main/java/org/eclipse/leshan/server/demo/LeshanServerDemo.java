@@ -490,6 +490,9 @@ public class LeshanServerDemo {
         server.start();
         LOG.info("Web server started at {}.", server.getURI());
 
+        LOG.info("AWS Region: {}", System.getenv("AWS_REGION"));
+        LOG.info("AWS Queue URL: {}", System.getenv("AWS_QUEUE_URL"));
+
         lwServer.getRegistrationService().addListener(new RegistrationListener() {
             @Override
             public void registered(Registration registration, Registration previousReg,
