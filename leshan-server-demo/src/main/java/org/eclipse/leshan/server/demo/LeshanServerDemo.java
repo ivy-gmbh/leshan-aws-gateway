@@ -74,6 +74,9 @@ import java.security.PublicKey;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class LeshanServerDemo {
 
@@ -500,15 +503,18 @@ public class LeshanServerDemo {
                                    Collection<Observation> previousObsersations) {
                 LOG.info("new device: {}", registration.getEndpoint());
 
-                // Observe battery
-                observe(lwServer, registration, 3, 0, 9);
-
-                // Observe temperature
-                observe(lwServer, registration, 3303, 0, 5700);
-
-                // Observe button counter
-                observe(lwServer, registration, 3347, 0, 5501);
-                observe(lwServer, registration, 3347, 1, 5501);
+                ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
+                executorService.schedule(new Runnable() {
+                    @Override
+                    public void run() {
+                        ArrayList<int[]> paths = new ArrayList<int[]>();
+                        paths.add(new int[] {3, 0, 9}); // Observe battery
+                        paths.add(new int[] {3303, 0, 5700}); // Observe temperature
+                        paths.add(new int[] {3347, 0, 5501}); // Observe button 1 counter
+                        paths.add(new int[] {3347, 1, 5501}); // Observe button 2 counter
+                        observe(lwServer, registration, paths);
+                    }
+                }, 5, TimeUnit.SECONDS);
             }
 
             @Override
@@ -536,7 +542,7 @@ public class LeshanServerDemo {
 
             @Override
             public void onResponse(Observation observation, Registration registration, ObserveResponse response) {
-                LOG.info("observation response: {} on {} {}", response.getObservation().getPath().toString(), registration.getEndpoint(), response.getContent());
+                LOG.info("observation response: {} on {}: {}", response.getObservation().getPath().toString(), registration.getEndpoint(), ((LwM2mSingleResource) response.getContent()).getValue().toString());
                 publishObservationResponse(registration, response);
             }
 
@@ -548,7 +554,13 @@ public class LeshanServerDemo {
         });
     }
 
-    private static void observe(LeshanServer lwServer, final Registration registration, final int objectId, final int objectInstanceId, final int resourceId) {
+    private static void observe(final LeshanServer lwServer, final Registration registration, final ArrayList<int[]> paths) {
+        if (paths.size() == 0) return;
+        int[] el = paths.remove(0);
+        final int objectId = el[0];
+        final int objectInstanceId = el[1];
+        final int resourceId = el[2];
+        LOG.info("Trying to observe /{}/{}/{} on {}", objectId, objectInstanceId, resourceId, registration.getEndpoint());
         lwServer.send(
                 registration,
                 new ObserveRequest(objectId, objectInstanceId, resourceId),
@@ -557,16 +569,18 @@ public class LeshanServerDemo {
                     @Override
                     public void onResponse(ObserveResponse response) {
                         if (response.isSuccess()) {
-                            LOG.info("/{}/{}/{} on {} : {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), ((LwM2mResource) response.getContent()).getValue());
+                            LOG.info("Observing /{}/{}/{} on {}: {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), ((LwM2mSingleResource) response.getContent()).getValue().toString());
                             publishNotification(registration, objectId, objectInstanceId, resourceId, ((LwM2mResource) response.getContent()).getValue().toString());
                         } else {
-                            LOG.error("Failed to read /{}/{}/{} on {}: {} {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), response.getCode(), response.getErrorMessage());
+                            LOG.error("Failed to observe /{}/{}/{} on {}: {} {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), response.getCode(), response.getErrorMessage());
                         }
+                        observe(lwServer, registration, paths);
                     }
                 }, new ErrorCallback() {
                     @Override
                     public void onError(Exception e) {
-                        LOG.error("Failed to read /{}/{}/{} on {} : {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), e.getMessage());
+                        LOG.error("Failed to observe /{}/{}/{} on {}: {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), e.getMessage());
+                        observe(lwServer, registration, paths);
                     }
                 }
         );
