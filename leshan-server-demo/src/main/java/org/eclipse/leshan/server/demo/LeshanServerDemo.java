@@ -505,6 +505,10 @@ public class LeshanServerDemo {
 
                 // Observe temperature
                 observe(lwServer, registration, 3303, 0, 5700);
+
+                // Observe button counter
+                observe(lwServer, registration, 3347, 0, 5500);
+                observe(lwServer, registration, 3347, 1, 5500);
             }
 
             @Override
