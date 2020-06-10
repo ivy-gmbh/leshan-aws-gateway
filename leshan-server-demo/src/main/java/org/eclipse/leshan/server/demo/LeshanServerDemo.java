@@ -509,6 +509,7 @@ public class LeshanServerDemo {
                     public void run() {
                         ArrayList<int[]> paths = new ArrayList<int[]>();
                         paths.add(new int[] {3, 0, 9}); // Observe battery
+                        paths.add(new int[] {4, 0, 2}); // Observe radio signal strength
                         paths.add(new int[] {3303, 0, 5700}); // Observe temperature
                         paths.add(new int[] {3347, 0, 5501}); // Observe button 1 counter
                         paths.add(new int[] {3347, 1, 5501}); // Observe button 2 counter
