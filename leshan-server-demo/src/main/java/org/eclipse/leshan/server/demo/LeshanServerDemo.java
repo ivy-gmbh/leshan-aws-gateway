@@ -507,8 +507,8 @@ public class LeshanServerDemo {
                 observe(lwServer, registration, 3303, 0, 5700);
 
                 // Observe button counter
-                observe(lwServer, registration, 3347, 0, 5500);
-                observe(lwServer, registration, 3347, 1, 5500);
+                observe(lwServer, registration, 3347, 0, 5501);
+                observe(lwServer, registration, 3347, 1, 5501);
             }
 
             @Override
