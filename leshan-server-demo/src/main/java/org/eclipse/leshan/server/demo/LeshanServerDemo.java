@@ -483,6 +483,12 @@ public class LeshanServerDemo {
         // Start Jetty & Leshan
         lwServer.start();
         server.start();
+        String v = System.getenv("VERSION");
+        if (v == null) {
+            v = "0.0.0-development";
+        }
+        LOG.info("Version: {}", v);
+
         LOG.info("Web server started at {}.", server.getURI());
 
         LOG.info("AWS Region: {}", System.getenv("AWS_REGION"));
