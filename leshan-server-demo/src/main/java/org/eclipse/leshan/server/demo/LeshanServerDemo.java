@@ -1,15 +1,15 @@
 /*******************************************************************************
  * Copyright (c) 2013-2015 Sierra Wireless and others.
- * 
+ *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v2.0
  * and Eclipse Distribution License v1.0 which accompany this distribution.
- * 
+ *
  * The Eclipse Public License is available at
  *    http://www.eclipse.org/legal/epl-v20.html
  * and the Eclipse Distribution License is available at
  *    http://www.eclipse.org/org/documents/edl-v10.html.
- * 
+ *
  * Contributors:
  *     Sierra Wireless - initial API and implementation
  *     Bosch Software Innovations - added Redis URL support with authentication
@@ -17,27 +17,13 @@
  *******************************************************************************/
 package org.eclipse.leshan.server.demo;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.net.BindException;
-import java.net.InetSocketAddress;
-import java.security.PrivateKey;
-import java.security.PublicKey;
-import java.security.cert.Certificate;
-import java.security.cert.X509Certificate;
-import java.util.*;
-import java.util.UUID;
-
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.services.sqs.AmazonSQS;
+import com.amazonaws.services.sqs.AmazonSQSClientBuilder;
 import com.amazonaws.services.sqs.model.MessageAttributeValue;
 import com.amazonaws.services.sqs.model.SendMessageRequest;
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.DefaultParser;
-import org.apache.commons.cli.HelpFormatter;
-import org.apache.commons.cli.Options;
-import org.apache.commons.cli.ParseException;
+import org.apache.commons.cli.*;
 import org.eclipse.californium.core.network.config.NetworkConfig;
 import org.eclipse.californium.core.network.config.NetworkConfig.Keys;
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
@@ -55,8 +41,10 @@ import org.eclipse.leshan.core.node.codec.DefaultLwM2mNodeEncoder;
 import org.eclipse.leshan.core.node.codec.LwM2mNodeDecoder;
 import org.eclipse.leshan.core.observation.Observation;
 import org.eclipse.leshan.core.request.ObserveRequest;
+import org.eclipse.leshan.core.response.ErrorCallback;
 import org.eclipse.leshan.core.response.ObserveResponse;
 import org.eclipse.leshan.core.response.ReadResponse;
+import org.eclipse.leshan.core.response.ResponseCallback;
 import org.eclipse.leshan.core.util.SecurityUtil;
 import org.eclipse.leshan.server.californium.LeshanServer;
 import org.eclipse.leshan.server.californium.LeshanServerBuilder;
@@ -77,65 +65,64 @@ import org.eclipse.leshan.server.security.FileSecurityStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.amazonaws.services.sqs.AmazonSQSClientBuilder;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.net.BindException;
+import java.net.InetSocketAddress;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
+import java.util.*;
 
 public class LeshanServerDemo {
 
-    static {
-        // Define a default logback.configurationFile
-        String property = System.getProperty("logback.configurationFile");
-        if (property == null) {
-            System.setProperty("logback.configurationFile", "logback-config.xml");
-        }
-    }
-
+    final static long TIMEOUT_IN_MS = 60 * 1000;
+    
     private static final Logger LOG = LoggerFactory.getLogger(LeshanServerDemo.class);
-
     // /!\ This field is a COPY of org.eclipse.leshan.client.demo.LeshanClientDemo.modelPaths /!\
     // TODO create a leshan-demo project ?
-    private final static String[] modelPaths = new String[] { "10241.xml", "10242.xml", "10243.xml", "10244.xml",
-                            "10245.xml", "10246.xml", "10247.xml", "10248.xml", "10249.xml", "10250.xml", "10251.xml",
-                            "10252.xml", "10253.xml", "10254.xml", "10255.xml", "10256.xml", "10257.xml", "10258.xml",
-                            "10259.xml", "10260-2_0.xml", "10260.xml", "10262.xml", "10263.xml", "10264.xml",
-                            "10265.xml", "10266.xml", "10267.xml", "10268.xml", "10269.xml", "10270.xml", "10271.xml",
-                            "10272.xml", "10273.xml", "10274.xml", "10275.xml", "10276.xml", "10277.xml", "10278.xml",
-                            "10279.xml", "10280.xml", "10281.xml", "10282.xml", "10283.xml", "10284.xml", "10286.xml",
-                            "10290.xml", "10291.xml", "10292.xml", "10299.xml", "10300.xml", "10308-2_0.xml",
-                            "10308.xml", "10309.xml", "10311.xml", "10313.xml", "10314.xml", "10315.xml", "10316.xml",
-                            "10318.xml", "10319.xml", "10320.xml", "10322.xml", "10323.xml", "10324.xml", "10326.xml",
-                            "10327.xml", "10328.xml", "10329.xml", "10330.xml", "10331.xml", "10332.xml", "10333.xml",
-                            "10334.xml", "10335.xml", "10336.xml", "10337.xml", "10338.xml", "10339.xml", "10340.xml",
-                            "10341.xml", "10342.xml", "10343.xml", "10344.xml", "10345.xml", "10346.xml", "10347.xml",
-                            "10348.xml", "10349.xml", "10350.xml", "10351.xml", "10352.xml", "10353.xml", "10354.xml",
-                            "10355.xml", "10356.xml", "10357.xml", "10358.xml", "10359.xml", "10360.xml", "10361.xml",
-                            "10362.xml", "10363.xml", "10364.xml", "10365.xml", "10366.xml", "10368.xml", "10369.xml",
+    private final static String[] modelPaths = new String[]{"10241.xml", "10242.xml", "10243.xml", "10244.xml",
+            "10245.xml", "10246.xml", "10247.xml", "10248.xml", "10249.xml", "10250.xml", "10251.xml",
+            "10252.xml", "10253.xml", "10254.xml", "10255.xml", "10256.xml", "10257.xml", "10258.xml",
+            "10259.xml", "10260-2_0.xml", "10260.xml", "10262.xml", "10263.xml", "10264.xml",
+            "10265.xml", "10266.xml", "10267.xml", "10268.xml", "10269.xml", "10270.xml", "10271.xml",
+            "10272.xml", "10273.xml", "10274.xml", "10275.xml", "10276.xml", "10277.xml", "10278.xml",
+            "10279.xml", "10280.xml", "10281.xml", "10282.xml", "10283.xml", "10284.xml", "10286.xml",
+            "10290.xml", "10291.xml", "10292.xml", "10299.xml", "10300.xml", "10308-2_0.xml",
+            "10308.xml", "10309.xml", "10311.xml", "10313.xml", "10314.xml", "10315.xml", "10316.xml",
+            "10318.xml", "10319.xml", "10320.xml", "10322.xml", "10323.xml", "10324.xml", "10326.xml",
+            "10327.xml", "10328.xml", "10329.xml", "10330.xml", "10331.xml", "10332.xml", "10333.xml",
+            "10334.xml", "10335.xml", "10336.xml", "10337.xml", "10338.xml", "10339.xml", "10340.xml",
+            "10341.xml", "10342.xml", "10343.xml", "10344.xml", "10345.xml", "10346.xml", "10347.xml",
+            "10348.xml", "10349.xml", "10350.xml", "10351.xml", "10352.xml", "10353.xml", "10354.xml",
+            "10355.xml", "10356.xml", "10357.xml", "10358.xml", "10359.xml", "10360.xml", "10361.xml",
+            "10362.xml", "10363.xml", "10364.xml", "10365.xml", "10366.xml", "10368.xml", "10369.xml",
 
-                            "2048.xml", "2049.xml", "2050.xml", "2051.xml", "2052.xml", "2053.xml", "2054.xml",
-                            "2055.xml", "2056.xml", "2057.xml",
+            "2048.xml", "2049.xml", "2050.xml", "2051.xml", "2052.xml", "2053.xml", "2054.xml",
+            "2055.xml", "2056.xml", "2057.xml",
 
-                            "3200.xml", "3201.xml", "3202.xml", "3203.xml", "3300.xml", "3301.xml", "3302.xml",
-                            "3303.xml", "3304.xml", "3305.xml", "3306.xml", "3308.xml", "3310.xml", "3311.xml",
-                            "3312.xml", "3313.xml", "3314.xml", "3315.xml", "3316.xml", "3317.xml", "3318.xml",
-                            "3319.xml", "3320.xml", "3321.xml", "3322.xml", "3323.xml", "3324.xml", "3325.xml",
-                            "3326.xml", "3327.xml", "3328.xml", "3329.xml", "3330.xml", "3331.xml", "3332.xml",
-                            "3333.xml", "3334.xml", "3335.xml", "3336.xml", "3337.xml", "3338.xml", "3339.xml",
-                            "3340.xml", "3341.xml", "3342.xml", "3343.xml", "3344.xml", "3345.xml", "3346.xml",
-                            "3347.xml", "3348.xml", "3349.xml", "3350.xml", "3351.xml", "3352.xml", "3353.xml",
-                            "3354.xml", "3355.xml", "3356.xml", "3357.xml", "3358.xml", "3359.xml", "3360.xml",
-                            "3361.xml", "3362.xml", "3363.xml", "3364.xml", "3365.xml", "3366.xml", "3367.xml",
-                            "3368.xml", "3369.xml", "3370.xml", "3371.xml", "3372.xml", "3373.xml", "3374.xml",
-                            "3375.xml", "3376.xml", "3377.xml", "3378.xml", "3379.xml", "3380-2_0.xml", "3380.xml",
-                            "3381.xml", "3382.xml", "3383.xml", "3384.xml", "3385.xml", "3386.xml",
+            "3200.xml", "3201.xml", "3202.xml", "3203.xml", "3300.xml", "3301.xml", "3302.xml",
+            "3303.xml", "3304.xml", "3305.xml", "3306.xml", "3308.xml", "3310.xml", "3311.xml",
+            "3312.xml", "3313.xml", "3314.xml", "3315.xml", "3316.xml", "3317.xml", "3318.xml",
+            "3319.xml", "3320.xml", "3321.xml", "3322.xml", "3323.xml", "3324.xml", "3325.xml",
+            "3326.xml", "3327.xml", "3328.xml", "3329.xml", "3330.xml", "3331.xml", "3332.xml",
+            "3333.xml", "3334.xml", "3335.xml", "3336.xml", "3337.xml", "3338.xml", "3339.xml",
+            "3340.xml", "3341.xml", "3342.xml", "3343.xml", "3344.xml", "3345.xml", "3346.xml",
+            "3347.xml", "3348.xml", "3349.xml", "3350.xml", "3351.xml", "3352.xml", "3353.xml",
+            "3354.xml", "3355.xml", "3356.xml", "3357.xml", "3358.xml", "3359.xml", "3360.xml",
+            "3361.xml", "3362.xml", "3363.xml", "3364.xml", "3365.xml", "3366.xml", "3367.xml",
+            "3368.xml", "3369.xml", "3370.xml", "3371.xml", "3372.xml", "3373.xml", "3374.xml",
+            "3375.xml", "3376.xml", "3377.xml", "3378.xml", "3379.xml", "3380-2_0.xml", "3380.xml",
+            "3381.xml", "3382.xml", "3383.xml", "3384.xml", "3385.xml", "3386.xml",
 
-                            "LWM2M_APN_Connection_Profile-v1_0_1.xml", "LWM2M_Bearer_Selection-v1_0_1.xml",
-                            "LWM2M_Cellular_Connectivity-v1_0_1.xml", "LWM2M_DevCapMgmt-v1_0.xml",
-                            "LWM2M_LOCKWIPE-v1_0_1.xml", "LWM2M_Portfolio-v1_0.xml",
-                            "LWM2M_Software_Component-v1_0.xml", "LWM2M_Software_Management-v1_0.xml",
-                            "LWM2M_WLAN_connectivity4-v1_0.xml", "LwM2M_BinaryAppDataContainer-v1_0_1.xml",
-                            "LwM2M_EventLog-V1_0.xml" };
-
+            "LWM2M_APN_Connection_Profile-v1_0_1.xml", "LWM2M_Bearer_Selection-v1_0_1.xml",
+            "LWM2M_Cellular_Connectivity-v1_0_1.xml", "LWM2M_DevCapMgmt-v1_0.xml",
+            "LWM2M_LOCKWIPE-v1_0_1.xml", "LWM2M_Portfolio-v1_0.xml",
+            "LWM2M_Software_Component-v1_0.xml", "LWM2M_Software_Management-v1_0.xml",
+            "LWM2M_WLAN_connectivity4-v1_0.xml", "LwM2M_BinaryAppDataContainer-v1_0_1.xml",
+            "LwM2M_EventLog-V1_0.xml"};
     private final static String USAGE = "java -jar leshan-server-demo.jar [OPTION]\n\n";
-
     private final static AmazonSQS sqs = AmazonSQSClientBuilder.standard()
             .withRegion(System.getenv("AWS_REGION"))
             .withCredentials(
@@ -153,6 +140,14 @@ public class LeshanServerDemo {
                             }
                     )
             ).build();
+
+    static {
+        // Define a default logback.configurationFile
+        String property = System.getProperty("logback.configurationFile");
+        if (property == null) {
+            System.setProperty("logback.configurationFile", "logback-config.xml");
+        }
+    }
 
     public static void main(String[] args) throws FileNotFoundException {
         // Define options for command line tools
@@ -336,7 +331,7 @@ public class LeshanServerDemo {
             if (input.isDirectory()) {
                 files = input.listFiles();
             } else {
-                files = new File[] { input };
+                files = new File[]{input};
             }
             for (File file : files) {
                 try {
@@ -349,7 +344,7 @@ public class LeshanServerDemo {
 
         try {
             createAndStartServer(webAddress, webPort, localAddress, localPort, secureLocalAddress, secureLocalPort,
-                    modelsFolderPath, publicKey, privateKey, certificate, trustStore,cl.hasOption("oc"));
+                    modelsFolderPath, publicKey, privateKey, certificate, trustStore, cl.hasOption("oc"));
         } catch (BindException e) {
             System.err.println(
                     String.format("Web port %s is already used, you could change it using 'webport' option.", webPort));
@@ -360,8 +355,8 @@ public class LeshanServerDemo {
     }
 
     public static void createAndStartServer(String webAddress, int webPort, String localAddress, Integer localPort,
-            String secureLocalAddress, Integer secureLocalPort, String modelsFolderPath,
-            PublicKey publicKey, PrivateKey privateKey, X509Certificate certificate, List<Certificate> trustStore,boolean supportDeprecatedCiphers) throws Exception {
+                                            String secureLocalAddress, Integer secureLocalPort, String modelsFolderPath,
+                                            PublicKey publicKey, PrivateKey privateKey, X509Certificate certificate, List<Certificate> trustStore, boolean supportDeprecatedCiphers) throws Exception {
         // Prepare LWM2M server
         LeshanServerBuilder builder = new LeshanServerBuilder();
         builder.setEncoder(new DefaultLwM2mNodeEncoder());
@@ -396,7 +391,7 @@ public class LeshanServerDemo {
             // use X.509 mode (+ RPK)
             serverCertificate = certificate;
             builder.setPrivateKey(privateKey);
-            builder.setCertificateChain(new X509Certificate[] { serverCertificate });
+            builder.setCertificateChain(new X509Certificate[]{serverCertificate});
         } else if (publicKey != null) {
             // use RPK only
             builder.setPublicKey(publicKey);
@@ -411,7 +406,7 @@ public class LeshanServerDemo {
                         .readFromResource("credentials/server_privkey.der");
                 serverCertificate = SecurityUtil.certificate.readFromResource("credentials/server_cert.der");
                 builder.setPrivateKey(embeddedPrivateKey);
-                builder.setCertificateChain(new X509Certificate[] { serverCertificate });
+                builder.setCertificateChain(new X509Certificate[]{serverCertificate});
             } catch (Exception e) {
                 LOG.error("Unable to load embedded X.509 certificate.", e);
                 System.exit(-1);
@@ -495,92 +490,84 @@ public class LeshanServerDemo {
 
         lwServer.getRegistrationService().addListener(new RegistrationListener() {
             @Override
-            public void registered(Registration registration, Registration previousReg,
+            public void registered(final Registration registration, Registration previousReg,
                                    Collection<Observation> previousObsersations) {
-                System.out.println("new device: " + registration.getEndpoint());
+                LOG.info("new device: {}", registration.getEndpoint());
+
                 // Observe battery
-                try {
-                    ReadResponse response = lwServer.send(registration, new ObserveRequest(3, 0, 9));
-                    if (response.isSuccess()) {
-                        System.out.println("Device battery level: " + ((LwM2mResource)response.getContent()).getValue());
-                        publishNotification(registration, 3,0,9, ((LwM2mResource)response.getContent()).getValue().toString());
-                    }else {
-                        System.out.println("Failed to read:" + response.getCode() + " " + response.getErrorMessage());
-                    }
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
+                observe(lwServer, registration, 3, 0, 9);
+
                 // Observe temperature
-                try {
-                    ReadResponse response = lwServer.send(registration, new ObserveRequest(3303,0,5700));
-                    if (response.isSuccess()) {
-                        System.out.println("Device temperature: " + ((LwM2mResource)response.getContent()).getValue());
-                        publishNotification(registration, 3303,0,5700, ((LwM2mResource)response.getContent()).getValue().toString());
-                    }else {
-                        System.out.println("Failed to read: " + response.getCode() + " " + response.getErrorMessage());
-                    }
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
+                observe(lwServer, registration, 3303, 0, 5700);
             }
 
             @Override
             public void updated(RegistrationUpdate update, Registration updatedReg, Registration previousReg) {
-                System.out.println("device is still here: " + updatedReg.getEndpoint());
+                LOG.info("device is still here: {}", updatedReg.getEndpoint());
             }
 
             @Override
             public void unregistered(Registration registration, Collection<Observation> observations, boolean expired,
                                      Registration newReg) {
-                System.out.println("device left: " + registration.getEndpoint());
+                LOG.info("device left: {}", registration.getEndpoint());
             }
         });
 
         lwServer.getObservationService().addListener(new ObservationListener() {
             @Override
             public void newObservation(Observation observation, Registration registration) {
-                System.out.println("new obervation: " + registration.getEndpoint());
+                LOG.info("new obervation ({}): {} on {}", observation.getRegistrationId(), observation.getPath().toString(), registration.getEndpoint());
             }
 
             @Override
             public void cancelled(Observation observation) {
-                System.out.println("observation cancelled: " + observation.getRegistrationId());
+                LOG.info("observation cancelled: {}", observation.getRegistrationId());
             }
 
             @Override
             public void onResponse(Observation observation, Registration registration, ObserveResponse response) {
-                System.out.println("observation response: " + registration.getEndpoint() + " " + response.getCode() + " " + response.getContent());
+                LOG.info("observation response: {} on {} {}", response.getObservation().getPath().toString(), registration.getEndpoint(), response.getContent());
                 publishObservationResponse(registration, response);
             }
 
             @Override
             public void onError(Observation observation, Registration registration, Exception error) {
-                System.out.println("observation error: " + observation.getRegistrationId());
-                System.out.println(error.toString());
+                LOG.info("observation {} error:", observation.getRegistrationId());
+                LOG.info(error.toString());
             }
         });
-
-        lwServer.getPresenceService().addListener(new PresenceListener() {
-            @Override
-            public void onAwake(Registration registration) {
-                System.out.println("onAwake: " + registration.getEndpoint());
-            }
-
-            @Override
-            public void onSleeping(Registration registration) {
-                System.out.println("onSleeping: " + registration.getEndpoint());
-            }
-        });
-
-
     }
 
-    private static void publishObservationResponse (Registration registration, ObserveResponse response) {
-        LwM2mPath path =response.getObservation().getPath();
+    private static void observe(LeshanServer lwServer, final Registration registration, final int objectId, final int objectInstanceId, final int resourceId) {
+        lwServer.send(
+                registration,
+                new ObserveRequest(objectId, objectInstanceId, resourceId),
+                TIMEOUT_IN_MS,
+                new ResponseCallback<ObserveResponse>() {
+                    @Override
+                    public void onResponse(ObserveResponse response) {
+                        if (response.isSuccess()) {
+                            LOG.info("/{}/{}/{} on {} : {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), ((LwM2mResource) response.getContent()).getValue());
+                            publishNotification(registration, objectId, objectInstanceId, resourceId, ((LwM2mResource) response.getContent()).getValue().toString());
+                        } else {
+                            LOG.error("Failed to read /{}/{}/{} on {}: {} {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), response.getCode(), response.getErrorMessage());
+                        }
+                    }
+                }, new ErrorCallback() {
+                    @Override
+                    public void onError(Exception e) {
+                        LOG.error("Failed to read /{}/{}/{} on {} : {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), e.getMessage());
+                    }
+                }
+        );
+    }
+
+    private static void publishObservationResponse(Registration registration, ObserveResponse response) {
+        LwM2mPath path = response.getObservation().getPath();
         publishNotification(registration, path.getObjectId(), path.getObjectInstanceId(), path.getResourceId(), ((LwM2mSingleResource) response.getContent()).getValue().toString());
     }
 
-    private static void publishNotification (Registration registration, int objectId, int objectInstanceId, int resourceId, String value) {
+    private static void publishNotification(Registration registration, int objectId, int objectInstanceId, int resourceId, String value) {
         final Map<String, MessageAttributeValue> messageAttributes = new HashMap<>();
         // Endpoint
         messageAttributes.put("Endpoint", new MessageAttributeValue()
@@ -608,8 +595,7 @@ public class LeshanServerDemo {
                 .withMessageAttributes(messageAttributes)
                 .withMessageGroupId(registration.getEndpoint())
                 .withMessageDeduplicationId(UUID.randomUUID().toString())
-                .withMessageBody("notification")
-                ;
+                .withMessageBody(String.format("%s\t/%d/%d/%d\t%s", registration.getEndpoint(), objectId, objectInstanceId, resourceId, value));
 
         sqs.sendMessage(send_msg_request);
     }
