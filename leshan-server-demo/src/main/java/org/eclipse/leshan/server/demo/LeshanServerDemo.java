@@ -18,7 +18,14 @@
 package org.eclipse.leshan.server.demo;
 
 import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
+import com.amazonaws.services.iot.client.*;
+import com.amazonaws.services.securitytoken.AWSSecurityTokenService;
+import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClientBuilder;
+import com.amazonaws.services.securitytoken.model.Credentials;
+import com.amazonaws.services.securitytoken.model.GetSessionTokenRequest;
+import com.amazonaws.services.securitytoken.model.GetSessionTokenResult;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClientBuilder;
 import com.amazonaws.services.sqs.model.MessageAttributeValue;
@@ -41,10 +48,11 @@ import org.eclipse.leshan.core.node.codec.DefaultLwM2mNodeEncoder;
 import org.eclipse.leshan.core.node.codec.LwM2mNodeDecoder;
 import org.eclipse.leshan.core.observation.Observation;
 import org.eclipse.leshan.core.request.ObserveRequest;
+import org.eclipse.leshan.core.request.WriteRequest;
 import org.eclipse.leshan.core.response.ErrorCallback;
 import org.eclipse.leshan.core.response.ObserveResponse;
-import org.eclipse.leshan.core.response.ReadResponse;
 import org.eclipse.leshan.core.response.ResponseCallback;
+import org.eclipse.leshan.core.response.WriteResponse;
 import org.eclipse.leshan.core.util.SecurityUtil;
 import org.eclipse.leshan.server.californium.LeshanServer;
 import org.eclipse.leshan.server.californium.LeshanServerBuilder;
@@ -56,12 +64,12 @@ import org.eclipse.leshan.server.demo.utils.MagicLwM2mValueConverter;
 import org.eclipse.leshan.server.model.LwM2mModelProvider;
 import org.eclipse.leshan.server.model.VersionedModelProvider;
 import org.eclipse.leshan.server.observation.ObservationListener;
-import org.eclipse.leshan.server.queue.PresenceListener;
 import org.eclipse.leshan.server.registration.Registration;
 import org.eclipse.leshan.server.registration.RegistrationListener;
 import org.eclipse.leshan.server.registration.RegistrationUpdate;
 import org.eclipse.leshan.server.security.EditableSecurityStore;
 import org.eclipse.leshan.server.security.FileSecurityStore;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -81,7 +89,7 @@ import java.util.concurrent.TimeUnit;
 public class LeshanServerDemo {
 
     final static long TIMEOUT_IN_MS = 60 * 1000;
-    
+
     private static final Logger LOG = LoggerFactory.getLogger(LeshanServerDemo.class);
     // /!\ This field is a COPY of org.eclipse.leshan.client.demo.LeshanClientDemo.modelPaths /!\
     // TODO create a leshan-demo project ?
@@ -126,23 +134,33 @@ public class LeshanServerDemo {
             "LWM2M_WLAN_connectivity4-v1_0.xml", "LwM2M_BinaryAppDataContainer-v1_0_1.xml",
             "LwM2M_EventLog-V1_0.xml"};
     private final static String USAGE = "java -jar leshan-server-demo.jar [OPTION]\n\n";
+
+    private final static AWSCredentialsProvider awsCredentials = new AWSStaticCredentialsProvider(
+            new AWSCredentials() {
+                @Override
+                public String getAWSAccessKeyId() {
+                    return System.getenv("AWS_ACCESS_KEY_ID");
+                }
+
+                @Override
+                public String getAWSSecretKey() {
+                    return System.getenv("AWS_SECRET_ACCESS_KEY");
+                }
+            }
+    );
+
     private final static AmazonSQS sqs = AmazonSQSClientBuilder.standard()
             .withRegion(System.getenv("AWS_REGION"))
             .withCredentials(
-                    new AWSStaticCredentialsProvider(
-                            new AWSCredentials() {
-                                @Override
-                                public String getAWSAccessKeyId() {
-                                    return System.getenv("AWS_ACCESS_KEY_ID");
-                                }
-
-                                @Override
-                                public String getAWSSecretKey() {
-                                    return System.getenv("AWS_SECRET_ACCESS_KEY");
-                                }
-                            }
-                    )
+                    awsCredentials
             ).build();
+
+    private final static AWSSecurityTokenService sts = AWSSecurityTokenServiceClientBuilder.standard()
+            .withRegion(System.getenv("AWS_REGION"))
+            .withCredentials(
+                    awsCredentials
+            )
+            .build();
 
     static {
         // Define a default logback.configurationFile
@@ -497,10 +515,21 @@ public class LeshanServerDemo {
         LOG.info("AWS Region: {}", System.getenv("AWS_REGION"));
         LOG.info("AWS Queue URL: {}", System.getenv("AWS_QUEUE_URL"));
 
+        // Listen for Device Shadow Deltas
+        String iotEndpoint = System.getenv("AWS_IOT_ENDPOINT");
+        LOG.info("AWS IoT endpoint: {}", iotEndpoint);
+        final String clientId = "leshan-" + UUID.randomUUID().toString();
+        GetSessionTokenRequest request = new GetSessionTokenRequest();
+        GetSessionTokenResult sessionTokenResult = sts.getSessionToken(request);
+        Credentials creds = sessionTokenResult.getCredentials();
+        final AWSIotMqttClient awsIotMqttClient = new AWSIotMqttClient(iotEndpoint, clientId, creds.getAccessKeyId(), creds.getSecretAccessKey(), creds.getSessionToken());
+        awsIotMqttClient.connect();
+        final Map<String, IotDeltaTopic> iotDevices = Collections.synchronizedMap(new HashMap<String, IotDeltaTopic>());
+
         lwServer.getRegistrationService().addListener(new RegistrationListener() {
             @Override
             public void registered(final Registration registration, Registration previousReg,
-                                   Collection<Observation> previousObsersations) {
+                                   Collection<Observation> previousObservations) {
                 LOG.info("new device: {}", registration.getEndpoint());
 
                 ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
@@ -508,14 +537,75 @@ public class LeshanServerDemo {
                     @Override
                     public void run() {
                         ArrayList<int[]> paths = new ArrayList<int[]>();
-                        paths.add(new int[] {3, 0, 9}); // Observe battery
-                        paths.add(new int[] {4, 0, 2}); // Observe radio signal strength
-                        paths.add(new int[] {3303, 0, 5700}); // Observe temperature
-                        paths.add(new int[] {3347, 0, 5501}); // Observe button 1 counter
-                        paths.add(new int[] {3347, 1, 5501}); // Observe button 2 counter
+                        paths.add(new int[]{3, 0, 9}); // Observe battery
+                        paths.add(new int[]{4, 0, 2}); // Observe radio signal strength
+                        paths.add(new int[]{3303, 0, 5700}); // Observe temperature
+                        paths.add(new int[]{3347, 0, 5501}); // Observe button 1 counter
+                        paths.add(new int[]{3347, 1, 5501}); // Observe button 2 counter
                         observe(lwServer, registration, paths);
                     }
                 }, 5, TimeUnit.SECONDS);
+
+                try {
+                    LOG.info("Iot: subscribing {}", registration.getEndpoint());
+                    IotDeltaTopic d = new IotDeltaTopic(registration.getEndpoint(), new OnDelta() {
+                        @Override
+                        public void onResourceDelta(final Number objectId, final Number objectInstanceId, final Number resourceId, final Boolean value) {
+                            LOG.info("Delta /{}/{}/{}: {}", objectId, objectInstanceId, resourceId, value);
+
+                            JSONObject resources = new JSONObject();
+                            resources.put(resourceId.toString(), value);
+
+                            JSONObject instances = new JSONObject();
+                            instances.put(objectInstanceId.toString(), resources);
+
+                            JSONObject reported = new JSONObject();
+                            reported.put(objectId.toString(), instances);
+
+                            JSONObject state = new JSONObject();
+                            state.put("reported", reported);
+
+                            JSONObject update = new JSONObject();
+                            update.put("state", state);
+
+                            try {
+                                awsIotMqttClient.publish(
+                                        new IotUpdateState(
+                                                "$aws/things/?/shadow/update".replace("?", registration.getEndpoint()),
+                                                AWSIotQos.QOS0,
+                                                update.toString()
+                                        ),
+                                        3000
+                                );
+                            } catch (AWSIotException err) {
+                                LOG.error("Could not update reported state {}: {}", registration.getEndpoint(), err.getMessage());
+                            }
+
+                            LOG.info("Updating resource: /{}/{}/{} on {} to {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), value);
+
+                            lwServer.send(
+                                    registration,
+                                    new WriteRequest(objectId.intValue(), objectInstanceId.intValue(), resourceId.intValue(), value),
+                                    new ResponseCallback<WriteResponse>() {
+                                        @Override
+                                        public void onResponse(WriteResponse response) {
+                                            LOG.info("Updated resource: /{}/{}/{} on {} to {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), value);
+                                        }
+                                    },
+                                    new ErrorCallback() {
+                                        @Override
+                                        public void onError(Exception e) {
+                                            LOG.error("Failed to update resource: /{}/{}/{} on {} to {}", objectId, objectInstanceId, resourceId, registration.getEndpoint(), value);
+                                        }
+                                    }
+                            );
+                        }
+                    });
+                    iotDevices.put(registration.getEndpoint(), d);
+                    awsIotMqttClient.subscribe(d);
+                } catch (AWSIotException err) {
+                    LOG.error("Could not subscribe {}: {}", registration.getEndpoint(), err.getMessage());
+                }
             }
 
             @Override
@@ -527,6 +617,16 @@ public class LeshanServerDemo {
             public void unregistered(Registration registration, Collection<Observation> observations, boolean expired,
                                      Registration newReg) {
                 LOG.info("device left: {}", registration.getEndpoint());
+                try {
+                    if (iotDevices.containsKey(registration.getEndpoint())) {
+                        LOG.info("Iot: unsubscribing {}", registration.getEndpoint());
+                        awsIotMqttClient.unsubscribe(
+                                iotDevices.get(registration.getEndpoint())
+                        );
+                    }
+                } catch (AWSIotException err) {
+                    LOG.error("Could not unsubscribe {}: {}", registration.getEndpoint(), err.getMessage());
+                }
             }
         });
 
